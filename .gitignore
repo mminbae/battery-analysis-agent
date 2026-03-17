@@ -1,0 +1,18 @@
+# Environment
+.env
+
+# Cache
+.cache/
+
+# Outputs
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
