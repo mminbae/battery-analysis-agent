@@ -42,9 +42,21 @@ INSTITUTIONAL_PATTERNS = [
 ]
 
 
+def _format_web_reference(src: str) -> str:
+    if src.startswith("[웹] "):
+        payload = src[len("[웹] "):]
+        parts = payload.split(" | ", 3)
+        if len(parts) == 4:
+            site, published_at, title, url = parts
+            if published_at:
+                return f"{site}({published_at}). {title}. {url}"
+            return f"{site}. {title}. {url}"
+    return src
+
+
 def _format_reference_section(sources: list[str]) -> str:
     """
-    [P2] 수집된 출처 목록을 설계서 양식에 맞게 분류·정리.
+    [P2] REFERENCE 초안을 설계서 양식에 맞게 분류·정리.
     - 기관 보고서: 발행기관(YYYY). 보고서명. URL
     - 웹페이지: 기관명(YYYY-MM-DD). 제목. 사이트명, URL
     """
@@ -55,6 +67,9 @@ def _format_reference_section(sources: list[str]) -> str:
     webpages = []
 
     for src in sources:
+        if src.startswith("[웹] "):
+            webpages.append(src)
+            continue
         is_institutional = any(re.search(p, src, re.IGNORECASE) for p in INSTITUTIONAL_PATTERNS)
         if is_institutional:
             institutional.append(src)
@@ -69,7 +84,7 @@ def _format_reference_section(sources: list[str]) -> str:
     if webpages:
         lines.append("\n**웹페이지**")
         for src in webpages:
-            lines.append(f"- {src}")
+            lines.append(f"- {_format_web_reference(src)}")
 
     return "\n".join(lines)
 
@@ -153,7 +168,7 @@ def report_node(state: WorkflowState) -> dict:
             swot_content=swot_content,
         )}
 
-## [P2] 수집된 출처 목록 (SECTION 7 REFERENCE에 이 형식으로 정리)
+## [P2] REFERENCE 초안 (SECTION 7 REFERENCE에 이 형식으로 정리)
 {formatted_references}
 
 {f"## 주의: 다음 항목은 근거 불충분으로 처리되었습니다{chr(10)}{chr(10).join(f'- {item}' for item in accumulated_fallbacks)}" if accumulated_fallbacks else ""}

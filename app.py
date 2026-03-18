@@ -16,6 +16,7 @@ import os
 import json
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -56,12 +57,28 @@ def export_pdf_from_markdown(markdown_path: str) -> str | None:
 
     markdown_file = Path(markdown_path)
     pdf_path = markdown_file.with_suffix(".pdf")
+    markdown_text = markdown_file.read_text(encoding="utf-8")
+
+    # md-to-pdf(marked)가 `~`를 취소선으로 해석하므로 PDF용 임시본에서는 안전하게 이스케이프
+    sanitized_text = markdown_text.replace("~", "&#126;")
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".md",
+        prefix=f"{markdown_file.stem}_pdf_",
+        dir=markdown_file.parent,
+        delete=False,
+    ) as temp_file:
+        temp_file.write(sanitized_text)
+        temp_markdown_path = Path(temp_file.name)
+
+    temp_pdf_path = temp_markdown_path.with_suffix(".pdf")
 
     command = [
         "npx",
         "-y",
         "md-to-pdf",
-        str(markdown_file),
+        str(temp_markdown_path),
         "--body-class",
         "markdown-body",
         "--stylesheet",
@@ -87,17 +104,22 @@ def export_pdf_from_markdown(markdown_path: str) -> str | None:
         subprocess.run(command, check=True, cwd=Path(__file__).parent)
     except subprocess.CalledProcessError as exc:
         print(f"[경고] PDF 변환 실패: {exc}")
+        temp_markdown_path.unlink(missing_ok=True)
+        temp_pdf_path.unlink(missing_ok=True)
         return None
 
-    if pdf_path.exists():
+    if temp_pdf_path.exists():
+        temp_pdf_path.replace(pdf_path)
+        temp_markdown_path.unlink(missing_ok=True)
         print(f"[완료] PDF 저장됨: {pdf_path}")
         return str(pdf_path)
 
+    temp_markdown_path.unlink(missing_ok=True)
     print("[경고] PDF 파일이 생성되지 않았습니다.")
     return None
 
 
-def save_report(content: str, sources: list[str], termination_reason: str, total_calls: int):
+def save_report(content: str, termination_reason: str, total_calls: int):
     """outputs/ 디렉토리에 보고서 저장."""
     output_dir = Path("outputs")
     output_dir.mkdir(exist_ok=True)
@@ -106,22 +128,12 @@ def save_report(content: str, sources: list[str], termination_reason: str, total
     filename = output_dir / f"battery_analysis_{timestamp}.md"
 
     separator = "━" * 60
-    report_text = f"""# 글로벌 배터리 시장 캐즘 대응 전략 비교 분석
-## LG에너지솔루션 vs CATL 포트폴리오 다각화 전략을 중심으로
-
+    report_text = f"""# LG에너지솔루션 vs CATL 포트폴리오 다각화
 > 생성일시: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-> 종료 사유: {termination_reason}
-> 총 LLM 호출 수: {total_calls}회
 
 {separator}
 
 {content}
-
-{separator}
-
-## 수집된 출처 목록
-
-{chr(10).join(f"- {s}" for s in sources) if sources else "출처 없음"}
 """
 
     filename.write_text(report_text, encoding="utf-8")
@@ -175,7 +187,6 @@ def run(query: str, data_dir: str = "data/"):
 
     final_report = final_state.get("final_report", {})
     report_content = final_report.get("content", "보고서 생성 실패")
-    report_sources = final_report.get("sources", [])
     fallback_items = final_state.get("fallback_items", []) + final_report.get("fallback_items", [])
 
     if fallback_items:
@@ -184,7 +195,7 @@ def run(query: str, data_dir: str = "data/"):
             print(f"  - {item}")
 
     # 6. 보고서 저장
-    output_path = save_report(report_content, report_sources, termination_reason, total_calls)
+    output_path = save_report(report_content, termination_reason, total_calls)
 
     # 7. 콘솔 미리보기 (첫 500자)
     print("\n[보고서 미리보기]")
