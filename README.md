@@ -42,45 +42,14 @@
 
 ## Architecture
 
-```
-[START]
-  ↓
-[Supervisor] ──→ 초기 지시
-  ↓
-[T1. Market Research Agent]
-  ↓ 계량 체크 → 재시도 max 2회
-[Supervisor] ──→ 품질 검토
-  ↓
-  ├─ [T2. LGES Strategy Agent] ─┐  ← 병렬 (Parallel)
-  └─ [T3. CATL Strategy Agent] ─┤
-                                 ↓
-              [Supervisor] ──→ 품질 검토
-                                 ↓
-              [T4. Critic Agent] ← 반론 (Negotiation)
-                                 ↓
-              [Supervisor] ──→ 균형성 판정
-                                 ↓
-              [T5. Comparison & SWOT Agent]
-                                 ↓
-              [Supervisor] ──→ 구조·일관성 검토
-                                 ↓
-              [T6. Report Writing Agent]
-                                 ↓
-              [Supervisor] ──→ 최종 Criteria 대조
-                                 ↓
-         ┌───────────────────────┼──────────────────────┐
-      success                fallback             cost_limit
-         ↓                      ↓                      ↓
-      [END]              [END: Fallback]        [END: Cost Limit]
-   보고서 출력          미완료 섹션 명시       LLM 20회 초과 종료
-```
+![Graph](assets/graph.png)
 
 ## Directory Structure
 
 ```
 battery-agent/
-├── data/                    # RAG용 PDF 문서 (직접 배치 필요)
-│   ├── IEA_GlobalEVOutlook2025_summary.pdf   (20p)
+├── data/                    # RAG용 PDF 문서
+│   ├── IEA_GlobalEVOutlook2025_summary.pdf    (20p)
 │   ├── LGES_annual_report.pdf                 (25p)
 │   ├── CATL_annual_report.pdf                 (25p)
 │   └── ESS_battery_report.pdf                 (25p)
@@ -102,75 +71,12 @@ battery-agent/
 ├── graph/
 │   ├── state.py             # WorkflowState, AgentOutput TypedDict
 │   └── graph.py             # LangGraph Supervisor 패턴 그래프
-├── outputs/                 # 생성된 보고서 (.md)
+├── outputs/                 # 생성된 보고서 (.md, .pdf)
 ├── app.py                   # 실행 스크립트
 ├── .env.example             # 환경변수 템플릿
 └── README.md
 ```
 
-## Setup
-
-### 1. 의존성 설치
-
-```bash
-# 프로젝트 루트(langgraph-v2/)에서 실행
-uv add langchain-huggingface sentence-transformers
-```
-
-또는 직접:
-```bash
-pip install langchain-huggingface sentence-transformers
-```
-
-### 2. 환경변수 설정
-
-```bash
-cd battery-agent/
-cp .env.example .env
-# .env 파일에 API 키 입력
-```
-
-```env
-OPENAI_API_KEY=sk-...
-TAVILY_API_KEY=tvly-...
-```
-
-### 3. PDF 배치
-
-`data/` 폴더에 다음 PDF를 배치하세요:
-
-| 파일명 | 용도 |
-|--------|------|
-| `IEA_GlobalEVOutlook2025_summary.pdf` | 글로벌 EV 시장 배경 (Market Research) |
-| `LGES_annual_report.pdf` | LGES 사업보고서 (LGES Strategy, Critic) |
-| `CATL_annual_report.pdf` | CATL 사업보고서 (CATL Strategy, Critic) |
-| `ESS_battery_report.pdf` | ESS 배터리 보고서 (Market Research, Critic) |
-
-> PDF가 없어도 실행 가능하며, 웹 검색만으로 분석합니다.
-
-### 4. 실행
-
-```bash
-cd battery-agent/
-python app.py
-```
-
-커스텀 질의:
-```bash
-python app.py --query "LGES와 CATL의 북미 시장 전략을 비교해줘"
-python app.py --data-dir /path/to/pdf/folder
-```
-
-## Output
-
-보고서는 `outputs/battery_analysis_YYYYMMDD_HHMMSS.md`로 저장됩니다.
-
-### 보고서 구조 (7개 섹션)
-
-1. **SUMMARY** — 핵심 발견사항 3~5개, 전략적 시사점
-2. **시장 배경** — EV 캐즘, HEV 피벗, ESS 성장, 기술 경쟁 지형
-3. **LG에너지솔루션 전략 분석** — 포트폴리오, 고객, 지역, R&D
-4. **CATL 전략 분석** — 포트폴리오, 고객, 지역, R&D
-5. **핵심 전략 비교 및 SWOT 분석** — 비교표 + SWOT 4분면
-6. **종합 시사점** — 환경별 우위 기업 판단, 의사결정 가이드
-7. **REFERENCE** — 인용 문서 및 웹 출처 목록
+## Contributors 
+- 배민 : Agent Design
+- 이성민 : Prompt Engineering, PDF Parsing
