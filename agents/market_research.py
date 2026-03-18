@@ -25,6 +25,17 @@ MIN_CONTENT_CHARS = 1000  # [P1] 출력 내용 최소 길이 (5개 항목 × 최
 MIN_RAG_DOCS = 3          # [P1] Agentic RAG: 문서 수 최소 기준
 
 
+def _build_market_web_queries(user_query: str) -> list[str]:
+    """최종 보고서 Section 2 소제목에 대응되는 웹 검색 쿼리."""
+    return [
+        f"전기차 캐즘 현황 원인 2025 배터리 시장 {user_query}",
+        "HEV 하이브리드 피벗 성장 2025 배터리 수요",
+        "ESS 에너지저장장치 시장 성장 전망 2025 배터리",
+        "LFP NCM 나트륨이온 배터리 기술 경쟁 지형 2025",
+        "배터리 공급망 지정학 관세 규제 리스크 2025 LGES CATL",
+    ]
+
+
 def _agentic_rag_search(retriever, initial_queries: list[str], category: str) -> list:
     """
     [P1] Agentic RAG: 초기 쿼리로 검색 후 결과가 부족하면 대안 쿼리로 재검색.
@@ -46,10 +57,10 @@ def _agentic_rag_search(retriever, initial_queries: list[str], category: str) ->
     if len(unique_docs) < MIN_RAG_DOCS:
         print(f"[T1/RAG] 문서 부족 ({len(unique_docs)}건) → 대안 쿼리로 재검색")
         fallback_queries = [
-            "electric vehicle market slowdown chasm battery 2024 2025",
-            "ESS energy storage system market growth GWh",
-            "LFP NCM sodium battery technology competition cost",
-            "global battery supply chain geopolitical risk China",
+            "electric vehicle market slowdown chasm battery 2025",
+            "ESS energy storage system market growth GWh 2025",
+            "LFP NCM sodium battery technology competition cost 2025",
+            "global battery supply chain geopolitical risk China 2025",
         ]
         for q in fallback_queries:
             docs = retriever.search(category, q)
@@ -81,16 +92,11 @@ def _run_market_research(user_query: str) -> tuple[str, list[str], bool, list[st
     unique_docs, rag_sources = _agentic_rag_search(retriever, rag_queries, "market")
     all_sources.extend(rag_sources)
 
-    # Web 검색 — 최신 시장 동향
-    web_queries = [
-        "EV 전기차 캐즘 2024 2025 배터리 시장",
-        "ESS 배터리 시장 성장 전망 2025",
-        "CATL LGES 배터리 시장 경쟁 구도",
-        "HEV 하이브리드 배터리 수요 증가 2025",
-    ]
+    # Web 검색 — 최종 보고서 Section 2 구조에 맞춘 최신 시장 동향
+    web_queries = _build_market_web_queries(user_query)
     web_docs_all = []
     for q in web_queries:
-        results = web_search(q, max_results=3)
+        results = web_search(q, max_results=4)
         web_docs_all.extend(results)
         all_sources.extend(extract_sources_from_web(results))
 
