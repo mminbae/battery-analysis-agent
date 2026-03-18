@@ -23,6 +23,17 @@ MIN_SOURCES = 3
 MIN_CONTENT_CHARS = 1200  # [P1] 5개 항목 × 최소 200자 + 여유
 
 
+def _build_catl_web_queries(user_query: str) -> list[str]:
+    """최종 보고서 Section 4 소제목에 대응되는 웹 검색 쿼리."""
+    return [
+        f"CATL 포트폴리오 다각화 전략 개요 2025 {user_query}",
+        "CATL LFP NCM 나트륨이온 Shenxing 제품 화학 포트폴리오 2025",
+        "CATL 글로벌 OEM ESS 신흥시장 고객 시장 다각화 수주 2025",
+        "CATL 중국 유럽 동남아 생산 전략 공장 2025",
+        "CATL 핵심 경쟁력 R&D 초고속충전 응축배터리 2025",
+    ]
+
+
 def _run_catl_strategy(user_query: str, market_content: str) -> tuple[str, list[str], bool, list[str]]:
     """
     RAG + Web Search (긍·부정 양방향)로 CATL 전략 분석 수행.
@@ -57,9 +68,9 @@ def _run_catl_strategy(user_query: str, market_content: str) -> tuple[str, list[
     if len(unique_docs) < 3:
         print("[T3/RAG] 문서 부족 → 대안 쿼리로 재검색")
         fallback_rag_queries = [
-            "CATL Contemporary Amperex Technology battery strategy",
-            "CATL annual report business overview revenue",
-            "CATL 사업 현황 매출 고객 점유율",
+            "CATL Contemporary Amperex Technology battery strategy 2025",
+            "CATL annual report business overview revenue 2025",
+            "CATL 사업 현황 매출 고객 점유율 2025",
         ]
         for q in fallback_rag_queries:
             docs = retriever.search("catl", q)
@@ -76,10 +87,13 @@ def _run_catl_strategy(user_query: str, market_content: str) -> tuple[str, list[
     web_docs_all = positive_results + negative_results
     all_sources.extend(extract_sources_from_web(web_docs_all))
 
-    # 추가 웹 검색
-    extra_results = web_search("CATL 2024 2025 전략 실적 배터리", max_results=3)
+    # 추가 웹 검색 — 최종 보고서 Section 4 구조에 맞춘 보강 쿼리
+    extra_results = []
+    for q in _build_catl_web_queries(user_query):
+        results = web_search(q, max_results=3)
+        extra_results.extend(results)
+        all_sources.extend(extract_sources_from_web(results))
     web_docs_all.extend(extra_results)
-    all_sources.extend(extract_sources_from_web(extra_results))
 
     unique_sources = list(dict.fromkeys(all_sources))
     quantitative_check = len(unique_sources) >= MIN_SOURCES

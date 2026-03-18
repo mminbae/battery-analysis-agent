@@ -13,6 +13,9 @@
 import argparse
 import sys
 import os
+import json
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +25,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).parent))
 
 load_dotenv()
+
+PDF_STYLESHEET = Path(__file__).parent / "styles" / "markdown-preview.css"
 
 
 DEFAULT_QUERY = (
@@ -41,6 +46,55 @@ def check_env():
         print(f"[오류] 다음 환경변수가 설정되지 않았습니다: {missing}")
         print("  .env 파일을 생성하고 API 키를 설정하세요.")
         sys.exit(1)
+
+
+def export_pdf_from_markdown(markdown_path: str) -> str | None:
+    """md-to-pdf로 Markdown을 PDF로 변환."""
+    if shutil.which("npx") is None:
+        print("[경고] npx를 찾을 수 없어 PDF 변환을 건너뜁니다.")
+        return None
+
+    markdown_file = Path(markdown_path)
+    pdf_path = markdown_file.with_suffix(".pdf")
+
+    command = [
+        "npx",
+        "-y",
+        "md-to-pdf",
+        str(markdown_file),
+        "--body-class",
+        "markdown-body",
+        "--stylesheet",
+        str(PDF_STYLESHEET),
+        "--highlight-style",
+        "github",
+        "--pdf-options",
+        json.dumps(
+            {
+                "format": "A4",
+                "margin": {
+                    "top": "16mm",
+                    "right": "14mm",
+                    "bottom": "18mm",
+                    "left": "14mm",
+                },
+                "printBackground": True,
+            }
+        ),
+    ]
+
+    try:
+        subprocess.run(command, check=True, cwd=Path(__file__).parent)
+    except subprocess.CalledProcessError as exc:
+        print(f"[경고] PDF 변환 실패: {exc}")
+        return None
+
+    if pdf_path.exists():
+        print(f"[완료] PDF 저장됨: {pdf_path}")
+        return str(pdf_path)
+
+    print("[경고] PDF 파일이 생성되지 않았습니다.")
+    return None
 
 
 def save_report(content: str, sources: list[str], termination_reason: str, total_calls: int):
@@ -72,6 +126,7 @@ def save_report(content: str, sources: list[str], termination_reason: str, total
 
     filename.write_text(report_text, encoding="utf-8")
     print(f"\n[완료] 보고서 저장됨: {filename}")
+    export_pdf_from_markdown(str(filename))
     return str(filename)
 
 

@@ -23,6 +23,17 @@ MIN_SOURCES = 3
 MIN_CONTENT_CHARS = 1200  # [P1] 5개 항목 × 최소 200자 + 여유
 
 
+def _build_lges_web_queries(user_query: str) -> list[str]:
+    """최종 보고서 Section 3 소제목에 대응되는 웹 검색 쿼리."""
+    return [
+        f"LG에너지솔루션 포트폴리오 다각화 전략 개요 2025 {user_query}",
+        "LG에너지솔루션 LFP NCM 파우치셀 제품 화학 포트폴리오 2025",
+        "LG에너지솔루션 OEM ESS HEV 고객 시장 다각화 수주 2025",
+        "LG에너지솔루션 북미 유럽 한국 생산 전략 공장 JV 2025",
+        "LG에너지솔루션 핵심 경쟁력 R&D 46시리즈 전고체 2025",
+    ]
+
+
 def _run_lges_strategy(user_query: str, market_content: str) -> tuple[str, list[str], bool, list[str]]:
     """
     RAG + Web Search (긍·부정 양방향)로 LGES 전략 분석 수행.
@@ -57,9 +68,9 @@ def _run_lges_strategy(user_query: str, market_content: str) -> tuple[str, list[
     if len(unique_docs) < 3:
         print("[T2/RAG] 문서 부족 → 대안 쿼리로 재검색")
         fallback_rag_queries = [
-            "LG Energy Solution battery strategy portfolio",
-            "LGES annual report business overview",
-            "LG에너지솔루션 사업 현황 매출 고객",
+            "LG Energy Solution battery strategy portfolio 2025",
+            "LGES annual report business overview 2025",
+            "LG에너지솔루션 사업 현황 매출 고객 2025",
         ]
         for q in fallback_rag_queries:
             docs = retriever.search("lges", q)
@@ -76,10 +87,13 @@ def _run_lges_strategy(user_query: str, market_content: str) -> tuple[str, list[
     web_docs_all = positive_results + negative_results
     all_sources.extend(extract_sources_from_web(web_docs_all))
 
-    # 추가 웹 검색 (CATL 내용 혼입 방지를 위해 명확히 LGES 한정)
-    extra_results = web_search("LG에너지솔루션 LGES 2024 2025 전략 실적 생산능력", max_results=3)
+    # 추가 웹 검색 — 최종 보고서 Section 3 구조에 맞춘 보강 쿼리
+    extra_results = []
+    for q in _build_lges_web_queries(user_query):
+        results = web_search(q, max_results=3)
+        extra_results.extend(results)
+        all_sources.extend(extract_sources_from_web(results))
     web_docs_all.extend(extra_results)
-    all_sources.extend(extract_sources_from_web(extra_results))
 
     unique_sources = list(dict.fromkeys(all_sources))
     quantitative_check = len(unique_sources) >= MIN_SOURCES
