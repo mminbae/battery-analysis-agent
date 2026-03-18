@@ -4,6 +4,10 @@ T3: CATL Strategy Agent
 CATL 전략 분석 — 포트폴리오·지역·기술 전략 정리.
 확증 편향 방지: 긍·부정 양방향 쿼리 사용.
 RAG (CATL 문서) + Web Search 활용.
+
+[P1 수정]
+- MIN_CONTENT_CHARS: 출력 내용 최소 길이 체크 추가
+- Agentic RAG: RAG 결과 부족 시 대안 쿼리로 보완 검색
 """
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -16,6 +20,7 @@ from prompts.prompts import CATL_STRATEGY_SYSTEM, CATL_STRATEGY_HUMAN
 
 MODEL_NAME = "gpt-4o-mini"
 MIN_SOURCES = 3
+MIN_CONTENT_CHARS = 1200  # [P1] 5개 항목 × 최소 200자 + 여유
 
 
 def _run_catl_strategy(user_query: str, market_content: str) -> tuple[str, list[str], bool, list[str]]:
@@ -47,6 +52,22 @@ def _run_catl_strategy(user_query: str, market_content: str) -> tuple[str, list[
         if doc.page_content not in seen_contents:
             seen_contents.add(doc.page_content)
             unique_docs.append(doc)
+
+    # [P1] Agentic RAG: RAG 결과 부족 시 대안 쿼리로 보완 검색
+    if len(unique_docs) < 3:
+        print("[T3/RAG] 문서 부족 → 대안 쿼리로 재검색")
+        fallback_rag_queries = [
+            "CATL Contemporary Amperex Technology battery strategy",
+            "CATL annual report business overview revenue",
+            "CATL 사업 현황 매출 고객 점유율",
+        ]
+        for q in fallback_rag_queries:
+            docs = retriever.search("catl", q)
+            for doc in docs:
+                if doc.page_content not in seen_contents:
+                    seen_contents.add(doc.page_content)
+                    unique_docs.append(doc)
+                    all_sources.extend(extract_sources_from_docs([doc]))
 
     # Web 검색 — 확증 편향 방지: 긍·부정 양방향
     positive_results, negative_results = web_search_bidirectional(
@@ -98,6 +119,13 @@ def _run_catl_strategy(user_query: str, market_content: str) -> tuple[str, list[
     response = llm.invoke(messages)
     content = response.content
 
+    # [P1] 출력 내용 길이 체크
+    if len(content) < MIN_CONTENT_CHARS:
+        quantitative_check = False
+        fallback_items.append(
+            f"T3 출력 내용 너무 짧음 (현재: {len(content)}자 / 최소: {MIN_CONTENT_CHARS}자)"
+        )
+
     return content, unique_sources, quantitative_check, fallback_items
 
 
@@ -118,7 +146,7 @@ def catl_strategy_node(state: WorkflowState) -> dict:
         "fallback_items": fallback_items,
     }
 
-    print(f"[T3] 완료 — quantitative_check: {quantitative_check}, 출처: {len(sources)}건")
+    print(f"[T3] 완료 — quantitative_check: {quantitative_check}, 출처: {len(sources)}건, 내용: {len(content)}자")
 
     return {
         "catl_strategy": output,
