@@ -3,12 +3,21 @@
 
 구조:
   START → supervisor → T1 → supervisor → [T2 || T3] → supervisor
-        → T4 → supervisor → T5 → supervisor → T6 → supervisor → END
+        → T4 → supervisor → T5 → supervisor → T6 → supervisor
+        → termination → END
 
 Supervisor는 모든 Agent 출력을 수신하고
 계량 조건·품질 기준에 따라 다음 Task를 지시하거나 재실행한다.
+
+[P0 수정]
+- supervisor_node: LLM 기반 품질 검토 실제 구현 (각 Task 완료 시 호출)
+- termination_node: termination_reason / is_completed 버그 수정
+  supervisor_router에서 END 직전 상태를 업데이트할 수 없는 LangGraph 제약을
+  별도 termination 노드로 해결
 """
 from typing import Union
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
@@ -19,9 +28,42 @@ from agents.catl_strategy import catl_strategy_node
 from agents.critic import critic_node
 from agents.swot import swot_node
 from agents.report import report_node
+from prompts.prompts import SUPERVISOR_QUALITY_CHECK, SUPERVISOR_CRITERIA
 
 MAX_LLM_CALLS = 20
 MAX_RETRY = 2
+SUPERVISOR_MODEL = "gpt-4o-mini"
+
+# Task ID → State 키 매핑
+TASK_TO_KEY = {
+    "T1": "market_research",
+    "T2": "lges_strategy",
+    "T3": "catl_strategy",
+    "T4": "critic_result",
+    "T5": "swot_comparison",
+    "T6": "final_report",
+}
+
+
+# ────────────────────────────────────────────────
+# Supervisor LLM 품질 검토 헬퍼
+# ────────────────────────────────────────────────
+def _llm_quality_check(task_id: str, content: str) -> tuple[bool, str]:
+    """
+    LLM을 호출하여 Agent 출력의 품질을 검토한다.
+    Returns: (passed: bool, reason: str)
+    """
+    criteria = SUPERVISOR_CRITERIA.get(task_id, "내용이 완전하고 출처가 병기됐는가?")
+    llm = ChatOpenAI(model=SUPERVISOR_MODEL, temperature=0)
+    prompt = SUPERVISOR_QUALITY_CHECK.format(
+        task_id=task_id,
+        content=content[:3000],  # 토큰 절약: 앞 3000자만 검토
+        criteria=criteria,
+    )
+    response = llm.invoke([HumanMessage(content=prompt)])
+    result = response.content.strip()
+    passed = result.upper().startswith("PASS")
+    return passed, result
 
 
 # ────────────────────────────────────────────────
@@ -31,11 +73,55 @@ def supervisor_node(state: WorkflowState) -> dict:
     """
     Supervisor는 State를 읽어 흐름을 제어한다.
     실제 라우팅은 supervisor_router(조건부 엣지)가 담당.
-    이 노드에서는 상태 업데이트만 수행.
+
+    [P0] 각 Task 완료 시 LLM 기반 품질 검토를 수행하고,
+    미통과 시 quantitative_check를 False로 재설정하여 재시도를 유도한다.
+    Agent 자체 계량 체크가 이미 실패한 경우 LLM 검토를 생략해 비용을 절약한다.
     """
-    print(f"[Supervisor] current_task={state.get('current_task', 'INIT')}, "
-          f"total_llm_calls={state.get('total_llm_calls', 0)}")
-    return {}
+    task = state.get("current_task", "INIT")
+    total_calls = state.get("total_llm_calls", 0)
+
+    print(f"[Supervisor] current_task={task}, total_llm_calls={total_calls}")
+
+    # 초기 진입 또는 비용 한도 초과 시 품질 검토 생략
+    if task == "INIT" or total_calls >= MAX_LLM_CALLS:
+        return {}
+
+    state_key = TASK_TO_KEY.get(task)
+    if not state_key:
+        return {}
+
+    agent_output = state.get(state_key, {})
+    content = agent_output.get("content", "")
+
+    # Agent 자체 계량 체크가 이미 실패했으면 LLM 검토 생략 (비용 절약)
+    if not agent_output.get("quantitative_check", False):
+        print(f"[Supervisor] {task} 계량 조건 미통과 → LLM 검토 생략")
+        return {}
+
+    # LLM 품질 검토 수행
+    print(f"[Supervisor] {task} LLM 품질 검토 중...")
+    passed, reason = _llm_quality_check(task, content)
+    print(f"[Supervisor] {task} 품질 검토 결과: {reason}")
+
+    if not passed:
+        # quantitative_check를 False로 재설정 → supervisor_router가 재시도 유도
+        updated_output = dict(agent_output)
+        updated_output["quantitative_check"] = False
+        updated_output["fallback_items"] = agent_output.get("fallback_items", []) + [
+            f"Supervisor LLM 품질 검토 미통과: {reason}"
+        ]
+        print(f"[Supervisor] {task} 품질 미통과 → 재시도 유도")
+        return {
+            state_key: updated_output,
+            "failed_criteria": state.get("failed_criteria", []) + [f"{task}: {reason}"],
+            "total_llm_calls": 1,  # Annotated[int, operator.add]로 합산됨
+        }
+
+    print(f"[Supervisor] {task} 품질 통과 ✓")
+    return {
+        "total_llm_calls": 1,  # Annotated[int, operator.add]로 합산됨
+    }
 
 
 # ────────────────────────────────────────────────
@@ -47,7 +133,7 @@ def supervisor_router(state: WorkflowState) -> Union[str, list]:
     반환값:
       - str: 단일 노드로 라우팅
       - list[Send]: 병렬 실행 (T2/T3)
-      - END: 종료
+      - "termination": 종료 전 상태 업데이트 노드
     """
     task = state.get("current_task", "INIT")
     retry = state.get("retry_count", {})
@@ -56,7 +142,7 @@ def supervisor_router(state: WorkflowState) -> Union[str, list]:
     # ── 최우선: 비용 초과 종료 ──
     if total_calls >= MAX_LLM_CALLS:
         print(f"[Supervisor] cost_limit 도달 (총 {total_calls}회)")
-        return END
+        return "termination"
 
     # ── 초기 진입: T1 시작 ──
     if task == "INIT":
@@ -85,7 +171,6 @@ def supervisor_router(state: WorkflowState) -> Union[str, list]:
             if retry.get("T2", 0) < MAX_RETRY:
                 print(f"[Supervisor] T2 미통과 → 재시도 (retry={retry.get('T2', 0)})")
                 return "lges_strategy"
-        # T3도 완료됐는지 확인 후 T4로
         catl = state.get("catl_strategy", {})
         if catl.get("content", "") == "":
             print("[Supervisor] T3 대기 중...")
@@ -100,7 +185,6 @@ def supervisor_router(state: WorkflowState) -> Union[str, list]:
             if retry.get("T3", 0) < MAX_RETRY:
                 print(f"[Supervisor] T3 미통과 → 재시도 (retry={retry.get('T3', 0)})")
                 return "catl_strategy"
-        # T2도 완료됐는지 확인 후 T4로
         lges = state.get("lges_strategy", {})
         if lges.get("content", "") == "":
             print("[Supervisor] T2 대기 중...")
@@ -139,27 +223,39 @@ def supervisor_router(state: WorkflowState) -> Union[str, list]:
                 return "report"
             else:
                 print("[Supervisor] T6 최대 재시도 초과 → fallback 종료")
-                return END
-        print("[Supervisor] T6 완료 → success 종료")
-        return END
+        print("[Supervisor] T6 완료 → termination")
+        return "termination"
 
-    return END
+    return "termination"
 
 
 # ────────────────────────────────────────────────
-# Termination State Update (각 END 직전에 처리)
+# Termination Node  [P0 버그 수정]
 # ────────────────────────────────────────────────
-def _update_termination_reason(state: WorkflowState) -> dict:
-    """종료 사유 업데이트 (supervisor_router에서 END 반환 전 호출)."""
+def termination_node(state: WorkflowState) -> dict:
+    """
+    [P0] termination_reason / is_completed 버그 수정.
+
+    supervisor_router는 조건부 엣지 함수라 State를 직접 수정할 수 없다.
+    따라서 END 직전에 별도 노드를 두어 종료 상태를 설정한다.
+    """
     total_calls = state.get("total_llm_calls", 0)
+
     if total_calls >= MAX_LLM_CALLS:
-        return {"termination_reason": "cost_limit", "is_completed": False}
+        reason = "cost_limit"
+        completed = False
+    elif state.get("final_report", {}).get("quantitative_check", False):
+        reason = "success"
+        completed = True
+    else:
+        reason = "fallback"
+        completed = False
 
-    report = state.get("final_report", {})
-    if report.get("quantitative_check", False):
-        return {"termination_reason": "success", "is_completed": True}
-
-    return {"termination_reason": "fallback", "is_completed": False}
+    print(f"[Termination] 종료 사유: {reason}, 완료: {completed}")
+    return {
+        "termination_reason": reason,
+        "is_completed": completed,
+    }
 
 
 # ────────────────────────────────────────────────
@@ -200,6 +296,7 @@ def build_graph():
     builder.add_node("critic", critic_node)
     builder.add_node("swot", swot_node)
     builder.add_node("report", report_node)
+    builder.add_node("termination", termination_node)  # [P0]
 
     # START → supervisor
     builder.add_edge(START, "supervisor")
@@ -207,6 +304,9 @@ def build_graph():
     # 모든 Agent → supervisor (고정 엣지)
     for agent_node in ["market_research", "lges_strategy", "catl_strategy", "critic", "swot", "report"]:
         builder.add_edge(agent_node, "supervisor")
+
+    # termination → END (고정 엣지)  [P0]
+    builder.add_edge("termination", END)
 
     # supervisor → ? (조건부 엣지)
     builder.add_conditional_edges(
@@ -219,7 +319,7 @@ def build_graph():
             "critic": "critic",
             "swot": "swot",
             "report": "report",
-            END: END,
+            "termination": "termination",  # [P0]
         },
     )
 
